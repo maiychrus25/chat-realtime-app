@@ -16,7 +16,7 @@ router.post("/", async (req, res) => {
     sender,
     text: prompt,
     imageUrl: image ? `data:image/jpeg;base64,${image}` : null,
-    createdAt: new Date(),
+    createdAt: new Date().toISOString(),
   });
   await userMessage.save();
 
