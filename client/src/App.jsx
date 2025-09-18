@@ -4,7 +4,18 @@ import axios from "axios";
 import ReactMarkdown from "react-markdown";
 import "./App.css";
 
-const socket = io("http://localhost:5000");
+const BACKEND_URL = "https://c1981cf1a2c2.ngrok-free.app";
+
+// Cấu hình Socket.IO với đầy đủ options
+const socket = io(BACKEND_URL, {
+  transports: ["websocket", "polling"], // Ưu tiên websocket trước
+  withCredentials: true,
+  extraHeaders: {
+    "ngrok-skip-browser-warning": "true",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "ngrok-skip-browser-warning, Content-Type",
+  },
+});
 
 function App() {
   const [messages, setMessages] = useState([]);
@@ -14,44 +25,75 @@ function App() {
   );
   const [image, setImage] = useState(null);
   const [preview, setPreview] = useState(null);
-
-  // Trạng thái AI đang trả lời
   const [aiTyping, setAiTyping] = useState(false);
-
-  // Số user online hiện tại
   const [onlineCount, setOnlineCount] = useState(0);
-
-  // Danh sách username đang typing
   const [usersTyping, setUsersTyping] = useState([]);
 
   const messagesEndRef = useRef(null);
+
+  // API call functions với headers được set trực tiếp
+  const fetchChatHistory = async () => {
+    try {
+      const response = await axios.get(`${BACKEND_URL}/upload/history`, {
+        headers: {
+          "ngrok-skip-browser-warning": "true",
+          "Content-Type": "application/json",
+        },
+      });
+      setMessages(response.data);
+    } catch (error) {
+      console.error("Failed to fetch chat history:", error);
+    }
+  };
+
+  const sendToAI = async (promptData) => {
+    try {
+      const response = await axios.post(`${BACKEND_URL}/ai`, promptData, {
+        headers: {
+          "ngrok-skip-browser-warning": "true",
+          "Content-Type": "application/json",
+        },
+      });
+      return response.data;
+    } catch (error) {
+      console.error("AI request failed:", error);
+      throw error;
+    }
+  };
+
+  const uploadImage = async (formData) => {
+    try {
+      const response = await axios.post(`${BACKEND_URL}/upload`, formData, {
+        headers: {
+          "ngrok-skip-browser-warning": "true",
+          "Content-Type": "multipart/form-data",
+        },
+      });
+      return response.data;
+    } catch (error) {
+      console.error("Image upload failed:", error);
+      throw error;
+    }
+  };
 
   useEffect(() => {
     socket.emit("add user", username);
   }, [username]);
 
   useEffect(() => {
-    // Lấy lịch sử chat
-    axios.get("http://localhost:5000/upload/history").then((res) => {
-      setMessages(res.data);
-    });
+    fetchChatHistory();
 
-    // Nhận tin nhắn chat mới
     socket.on("chat message", (msg) => {
       setMessages((prev) => [...prev, msg]);
-
-      // AI trả lời xong thì tắt trạng thái
       if (msg.sender === "Gemini-Bot") {
         setAiTyping(false);
       }
     });
 
-    // Cập nhật số lượng user online
     socket.on("online users", (count) => {
       setOnlineCount(count);
     });
 
-    // Cập nhật danh sách user đang typing
     socket.on("typing", (typingUsers) => {
       setUsersTyping(typingUsers.filter((user) => user !== username));
     });
@@ -67,15 +109,13 @@ function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Gửi sự kiện typing khi nhập input
   useEffect(() => {
     if (input.trim() === "") {
       socket.emit("stop typing", username);
       return;
     }
-    socket.emit("typing", username);
 
-    // Tạo timeout để gửi stop typing khi ngưng nhập 1s
+    socket.emit("typing", username);
     const timeoutId = setTimeout(() => {
       socket.emit("stop typing", username);
     }, 1000);
@@ -97,10 +137,33 @@ function App() {
     }
   };
 
+  const handleAIMessage = async (
+    prompt,
+    imageBase64 = null,
+    imageUrl = null
+  ) => {
+    try {
+      const aiResponse = await sendToAI({
+        prompt,
+        sender: username,
+        image: imageBase64,
+        imageUrl,
+      });
+
+      socket.emit("chat message", {
+        sender: "Gemini-Bot",
+        text: aiResponse.message,
+        imageUrl: aiResponse.imageUrl,
+        createdAt: new Date(),
+      });
+    } catch (error) {
+      alert("AI server error!");
+      setAiTyping(false);
+    }
+  };
+
   const sendMessage = async (e) => {
     e.preventDefault();
-
-    // Khi gửi, user ngừng typing
     socket.emit("stop typing", username);
 
     if (input.startsWith("/ai ")) {
@@ -108,105 +171,74 @@ function App() {
       setInput("");
       setAiTyping(true);
 
-      try {
-        if (image) {
+      // Send user message first
+      socket.emit("chat message", {
+        sender: username,
+        text: input,
+        imageUrl: null,
+        createdAt: new Date(),
+      });
+
+      if (image) {
+        try {
           const formData = new FormData();
           formData.append("image", image);
           formData.append("sender", username);
           formData.append("text", input);
 
-          const uploadRes = await axios.post(
-            "http://localhost:5000/upload",
-            formData
-          );
-          const imageUrl = uploadRes.data.imageUrl;
+          const uploadRes = await uploadImage(formData);
+          const uploadedImageUrl = uploadRes.imageUrl;
 
           const reader = new FileReader();
           reader.onloadend = async () => {
             const imageBase64 = reader.result.split(",")[1];
-            const res = await axios.post("http://localhost:5000/ai", {
-              prompt,
-              sender: username,
-              image: imageBase64,
-              imageUrl,
-            });
-            socket.emit("chat message", {
-              sender: "Gemini-Bot",
-              text: res.data.message,
-              imageUrl: imageUrl,
-              createdAt: new Date(),
-            });
+            await handleAIMessage(prompt, imageBase64, uploadedImageUrl);
           };
           reader.readAsDataURL(image);
-
-          socket.emit("chat message", {
-            sender: username,
-            text: input,
-            imageUrl: imageUrl,
-            createdAt: new Date(),
-          });
-
-          setImage(null);
-          setPreview(null);
-          return;
-        } else {
-          const res = await axios.post("http://localhost:5000/ai", {
-            prompt,
-            sender: username,
-          });
-
-          socket.emit("chat message", {
-            sender: "Gemini-Bot",
-            text: res.data.message,
-            imageUrl: null,
-            createdAt: new Date(),
-          });
-
-          socket.emit("chat message", {
-            sender: username,
-            text: input,
-            imageUrl: null,
-            createdAt: new Date(),
-          });
+        } catch (error) {
+          setAiTyping(false);
         }
-      } catch {
-        alert("AI server error!");
-        setAiTyping(false);
+
+        setImage(null);
+        setPreview(null);
+      } else {
+        await handleAIMessage(prompt);
       }
       return;
     }
 
+    // Regular message with image
     if (image) {
-      const formData = new FormData();
-      formData.append("image", image);
-      formData.append("sender", username);
-      formData.append("text", input);
       try {
-        const res = await axios.post("http://localhost:5000/upload", formData);
-        socket.emit("chat message", res.data);
-      } catch {
+        const formData = new FormData();
+        formData.append("image", image);
+        formData.append("sender", username);
+        formData.append("text", input);
+
+        const uploadedMsg = await uploadImage(formData);
+        socket.emit("chat message", uploadedMsg);
+      } catch (error) {
         alert("Image upload error!");
       }
-      setImage(null);
-      setPreview(null);
-      setInput("");
-      return;
+    } else {
+      // Regular text message
+      socket.emit("chat message", {
+        sender: username,
+        text: input,
+        imageUrl: null,
+        createdAt: new Date(),
+      });
     }
 
-    socket.emit("chat message", {
-      sender: username,
-      text: input,
-      imageUrl: null,
-      createdAt: new Date(),
-    });
     setInput("");
+    setImage(null);
+    setPreview(null);
   };
 
   return (
     <div className="chat-container">
       <h2 className="chat-title">Gemini AI Chat</h2>
 
-      {/* Hiển thị số user online */}
       <div style={{ marginBottom: 10 }}>
         <b>Online users: {onlineCount}</b>
       </div>
@@ -217,6 +249,7 @@ function App() {
         className="username-input"
         placeholder="Username"
       />
+
       <div className="chat-box">
         {messages.map((msg, idx) => (
           <div
@@ -243,7 +276,6 @@ function App() {
           </div>
         )}
 
-        {/* Hiển thị trạng thái typing của user khác */}
         {usersTyping.length > 0 && (
           <div className="chat-message typingIndicator">
             <i>{usersTyping.join(", ")} đang chat...</i>

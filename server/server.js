@@ -3,35 +3,50 @@ const http = require("http");
 const socketIo = require("socket.io");
 const mongoose = require("mongoose");
 const dotenv = require("dotenv");
+const cors = require("cors");
+
 const messageRoutes = require("./routes/upload");
 const aiRoutes = require("./routes/ai");
 const Message = require("./models/Message");
-const cors = require("cors");
 
 dotenv.config();
 
 const app = express();
-app.use(cors({ origin: "http://localhost:3000" }));
-const server = http.createServer(app);
-const io = socketIo(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"],
-  },
-});
 
-// Connect Mongoose Database
+// Lấy frontend URL từ biến môi trường hoặc mặc định "*"
+const frontendUrl = "https://433e7f3ac972.ngrok-free.app";
+
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: [
+      "ngrok-skip-browser-warning",
+      "Content-Type",
+      "Authorization",
+    ],
+    credentials: true,
+  })
+);
+
+// Middleware parse body
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+// Router
+app.use("/upload", messageRoutes);
+app.use("/ai", aiRoutes);
+
+const server = http.createServer(app);
+const io = socketIo(server);
+
+// Kết nối MongoDB
 mongoose
   .connect(process.env.DATABASE)
   .then(() => console.log("MongoDB connected"))
   .catch((err) => console.error("MongoDB connection error:", err));
 
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
-app.use("/upload", messageRoutes);
-app.use("/ai", aiRoutes);
-
-// --- Dữ liệu theo kết nối để quản lý user online & typing
+// Quản lý user online & typing
 const onlineUsers = new Set();
 const typingUsers = new Set();
 
@@ -40,30 +55,26 @@ io.on("connection", (socket) => {
 
   let addedUser = false;
 
-  // Client gửi username khi kết nối hoặc thay đổi tên
   socket.on("add user", (username) => {
     if (addedUser) return;
     socket.username = username;
     onlineUsers.add(username);
     addedUser = true;
 
-    // Gửi số lượng user online cho tất cả client
     io.emit("online users", onlineUsers.size);
     console.log(`User added: ${username}, online: ${onlineUsers.size}`);
   });
 
   socket.on("chat message", async ({ sender, text, imageUrl }) => {
     try {
-      // Save message to MongoDB
       const newMsg = new Message({
         sender,
-        text: text,
+        text,
         imageUrl,
         createdAt: new Date().toISOString(),
       });
       await newMsg.save();
 
-      // Emit message to all clients
       io.emit("chat message", newMsg);
       console.log("Saved message from", sender);
     } catch (err) {
@@ -71,7 +82,6 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Xử lý user đang gõ (typing)
   socket.on("typing", (username) => {
     typingUsers.add(username);
     io.emit("typing", Array.from(typingUsers));

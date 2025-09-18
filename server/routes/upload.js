@@ -5,36 +5,49 @@ const router = express.Router();
 const cloudinaryService = require("../services/cloudinary.service");
 const upload = multer({ storage: cloudinaryService.storage });
 
-// Route for uploading images
+// Middleware to set headers
+router.use((req, res, next) => {
+  res.setHeader("ngrok-skip-browser-warning", "true");
+  next();
+});
+
 router.post("/", upload.single("image"), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: "No file uploaded" });
+    const { sender, text } = req.body;
+    let imageUrl = null;
+
+    if (req.file) {
+      imageUrl = req.file.path;
     }
 
-    // Upload image to Cloudinary
-    // Save message with imageUrl to MongoDB
-
-    const file = req.file;
-    console.log(file);
-
     const msg = new Message({
-      sender: req.body.sender,
-      text: req.body.text || "",
-      imageUrl: file.path,
+      sender: sender,
+      text: text || "",
+      imageUrl: imageUrl,
       createdAt: new Date(),
     });
-    msg.save();
+
+    await msg.save();
+
     res.status(200).json(msg);
   } catch (error) {
-    res.status(500).json({ error: "Upload failed", details: error });
+    res.status(500).json({
+      error: "Upload failed",
+      details: error.message,
+    });
   }
 });
 
-// Route for chat history
 router.get("/history", async (req, res) => {
-  const messages = await Message.find().sort({ createdAt: 1 });
-  res.json(messages);
+  try {
+    const messages = await Message.find().sort({ createdAt: 1 });
+    res.json(messages);
+  } catch (error) {
+    res.status(500).json({
+      error: "Failed to fetch chat history",
+      details: error.message,
+    });
+  }
 });
 
 module.exports = router;

@@ -5,9 +5,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 3000,
-    proxy: {
-      "/upload": "http://localhost:5000",
-      "/ai": "http://localhost:5000",
-    },
+    allowedHosts: ["433e7f3ac972.ngrok-free.app"],
+    // Bỏ allowedHosts và proxy
   },
 });
